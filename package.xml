@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<package format="1" xmlns="https://wiki.freecad.org/Package_Metadata">
+  <name>AIDibujanteModular</name>
+  <description>Copiloto CAD local para FreeCAD: generación paramétrica de piezas mecánicas desde texto e imágenes usando IA local (Ollama), con validación trazable, correcciones automáticas y exportación STEP/STL.</description>
+  <version>0.3.0</version>
+  <date>2026-07-02</date>
+  <maintainer email="none@example.com">sebaguimad</maintainer>
+  <license file="LICENSE">LGPL-2.1-or-later</license>
+  <url type="repository" branch="main">https://github.com/sebaguimad/freecad-mechanical-ai-copilot</url>
+  <content>
+    <workbench>
+      <classname>AIDibujanteModularWorkbench</classname>
+      <subdirectory>./</subdirectory>
+    </workbench>
+  </content>
+</package>

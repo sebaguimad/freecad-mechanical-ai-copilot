@@ -1,205 +1,131 @@
-# FreeCAD AI Mechanical Copilot
+# AI Dibujante Modular — v0.3 (versión universal)
 
-FreeCAD AI Mechanical Copilot is an experimental FreeCAD Workbench for AI-assisted mechanical CAD generation.
+Copiloto CAD local para FreeCAD. Genera piezas mecánicas paramétricas desde
+texto o imágenes usando IA local (Ollama), con validación trazable,
+correcciones automáticas registradas y exportación STEP/STL.
 
-The project converts natural language instructions into a traceable CAD Feature Plan, executes the operations inside FreeCAD, and generates mechanical parts step by step. It currently uses a local LLM through Ollama, so it can run without paid cloud APIs.
+## Qué hay de nuevo en esta versión
 
-## Current Project Status
+### 1. Pipeline universal (texto)
 
-### MVP 1: Working
+Un solo botón: el sistema clasifica el pedido y lo rutea al dominio correcto.
 
-The first MVP is functional. The Workbench can:
+```
+prompt → clasificador → shaft | frame_structure | custom
+       → schema JSON de esa familia (Ollama, salida estructurada)
+       → validador del dominio (corrige y registra)
+       → planner → feature tree
+       → executor unificado → geometría FreeCAD
+```
 
-- appear inside FreeCAD as a custom Workbench;
-- open a custom assistant panel;
-- parse structured shaft prompts locally;
-- generate a traceable CAD Feature Plan;
-- execute the CAD operations step by step;
-- generate stepped shafts inside FreeCAD;
-- export STEP and STL files;
-- store generation logs;
-- extract basic geometric metrics such as volume, area, center of mass and bounding box.
+### 2. Nuevo dominio `custom` (el universal)
 
-### MVP 2: Local AI Integrated
+En vez de código Python libre (frágil con modelos locales de 8B), la IA
+devuelve una lista ordenada de operaciones genéricas:
 
-The second MVP is also functional. The Workbench can:
+`box, cylinder, cone, sphere, polygon_prism, polar_pattern, fillet_all, chamfer_all`
 
-- connect to a local Ollama model;
-- use a local open-source LLM such as Qwen;
-- convert natural language prompts into structured CAD specifications;
-- generate a Feature Plan from the AI output;
-- execute AI-generated CAD operations inside FreeCAD.
+con modo `agregar` / `cortar`. Con ese vocabulario se aproximan engranajes
+simplificados, bridas, poleas, soportes, bujes, ménsulas, placas con
+agujeros, adaptadores, etc. Ejemplos que ya funcionan:
 
-Example prompt:
+- "Genera un engranaje recto de 40 dientes, módulo 2, ancho 20, agujero Ø20 con chavetero"
+- "Brida circular Ø160, espesor 15, agujero central Ø60, 6 pernos M12 en círculo Ø120"
 
-```text
-Diseña un eje de 250 mm con extremos delgados y tramo central robusto para montar una polea. Agrega chavetero central y rosca M20 derecha.
+### 3. Correcciones de bugs de la versión anterior
 
-The system can generate:
+- **Router roto**: `domain_router` importaba `domains/shaft` y `domains/plate`
+  inexistentes (ImportError en runtime). Ahora `shaft` existe como dominio
+  formal y cualquier familia desconocida cae a `custom`.
+- **Regex peligroso**: el validador capturaba el primer número con "mm" del
+  prompt como longitud total (p.ej. "chavetero de 40 mm" redimensionaba el
+  eje). Ahora la longitud total viene como campo `longitud_total` del JSON
+  de la IA; el regex quedó solo como fallback con patrones explícitos.
+- **Filete que reventaba**: `makeFillet` sobre TODAS las aristas fallaba en
+  OCC con chaveteros/roscas. Ahora: `fillet_shoulders` (solo aristas de
+  hombro en ejes) y `aplicar_filete_seguro` (degrada arista por arista con
+  warning en vez de abortar).
+- **Rosca que rellenaba chaveteros**: la rosca simplificada (cut+fuse)
+  destruía un chavetero solapado. El validador recorta o elimina la rosca
+  en conflicto, y el planner además ejecuta roscas antes que chaveteros.
+- **Dos executors**: `FeatureExecutor` (ejes) y `frame_direct_executor`
+  (estructuras, sin logging). Ahora hay UN executor trazable para todo,
+  con BOM integrado y transacción de documento (un Ctrl+Z revierte la pieza).
+- **Headless**: `FreeCADGui` se importa protegido; el pipeline corre en
+  `freecadcmd` (permite automatizar y testear).
+- **Código triplicado de Ollama**: unificado en `ai/ollama_client.py`.
+- **package.xml** agregado (Addon Manager).
 
-cylindrical shaft segments;
-Boolean fusion;
-simplified keyway cuts;
-simplified thread zones;
-geometric metrics;
-traceable logs.
-MVP 3: In Progress / Required
+### 4. Tests (sin FreeCAD)
 
-The next development stage requires a geometric and mechanical validation layer.
+Los validadores, planners y el router son Python puro:
 
-Planned module:
+```
+pip install pytest
+pytest tests/ -v        # 26 tests
+```
 
-core/plan_validator.py
+## Instalación
 
-The validator should check and correct AI-generated Feature Plans before execution.
+1. Copiar esta carpeta a `<UserAppData>/FreeCAD/Mod/AIDibujanteModular`
+   (en Windows: `%APPDATA%/FreeCAD/Mod/AIDibujanteModular`).
+2. Instalar Ollama y los modelos:
+   ```
+   ollama pull qwen3:8b
+   ollama pull qwen2.5vl:7b
+   ```
+3. Abrir FreeCAD → workbench "AIDibujanteModular" → Abrir asistente.
 
-Required validations include:
+Variables de entorno opcionales:
+`AI_CAD_OLLAMA_URL`, `AI_CAD_OLLAMA_MODEL`, `AI_CAD_OLLAMA_VISION_MODEL`.
 
-verify that the sum of segment lengths matches the requested total length;
-verify that keyways remain inside their assigned shaft segment;
-remove duplicated keyways when only one was requested;
-verify that a thread diameter is compatible with the shaft segment diameter;
-prevent operations that do not intersect or modify the model;
-detect inconsistent AI assumptions;
-validate mechanical design rules before generating geometry.
-Main Features
-FreeCAD custom Workbench
-Local AI integration with Ollama
-Natural language to CAD Feature Plan
-Step-by-step CAD execution
-Traceable operation logs
-STEP/STL export
-Geometric metric extraction
-Experimental support for mechanical shaft features
-Supported CAD Operations
+## Uso
 
-Current supported operations:
+| Botón | Qué hace |
+|---|---|
+| 1. IA universal (texto) | Clasifica y genera el plan del dominio correcto |
+| 1B. Parser simple | `Ø20x60, Ø30x120, Ø25x70` sin IA |
+| 1C. Desde imagen | Reconstrucción paramétrica aproximada (estructuras) |
+| 2 / 3 | Ejecutar paso a paso o todo (trazable, con métricas) |
+| 4 | Exportar STEP + STL a `~/AIDibujanteOutputs` |
 
-cylinder creation
-Boolean fuse
-simplified keyway cut
-simplified thread zone
-global fillet operation
-STEP export
-STL export
-Project Architecture
-User Prompt
-↓
-Local Parser or Ollama LLM
-↓
-Structured CAD Specification
-↓
-Feature Plan
-↓
-Feature Executor
-↓
-FreeCAD Geometry
-↓
-Logs + Metrics + Export
-Folder Structure
-AIDibujantetrazable/
-│
-├─ Init.py
-├─ InitGui.py
-├─ commands.py
-│
-├─ core/
-│  ├─ __init__.py
-│  ├─ parser.py
-│  ├─ local_ai_parser.py
-│  ├─ feature_plan.py
-│  ├─ executor.py
-│  ├─ exporter.py
-│  ├─ logger.py
-│  └─ metrics.py
-│
-├─ generators/
-│  ├─ __init__.py
-│  └─ primitives.py
-│
-└─ ui/
-   ├─ __init__.py
-   └─ panel.py
-Requirements
-FreeCAD 1.0.0 or later
-Python included with FreeCAD
-Ollama installed locally
-A local model such as:
-ollama pull qwen3:4b
+Logs JSONL de cada operación en `~/AIDibujanteLogs`.
 
-Optional:
+## Filosofía Texto vs Imagen
 
-ollama pull qwen3:8b
-Ollama Setup
+- **Texto** → diseñar desde cero o reconstruir aproximadamente por descripción.
+- **Imagen** → reconstruir aproximadamente algo existente.
 
-Set the model used by the Workbench:
+Ambos convergen en el mismo `design_request` → mismo validador → mismo
+executor. La imagen es solo otro sensor del mismo pipeline.
 
-setx AI_CAD_OLLAMA_MODEL "qwen3:4b"
+## Estructura
 
-Restart FreeCAD after setting the environment variable.
+```
+ai/            cliente Ollama unificado, visión, saneo JSON, config modelos
+core/          clasificador, parser universal, router, executor, logger,
+               métricas, exportador, capabilities
+domains/
+  shaft/           eje escalonado (spec + validador + planner + summary)
+  frame_structure/ estructuras de perfiles (con BOM)
+  custom/          dominio universal por operaciones genéricas
+generators/    primitivas geométricas (único módulo que toca Part)
+ui/            panel Qt
+tests/         26 tests de validadores, planners y router (sin FreeCAD)
+```
 
-Installation
+## Limitaciones declaradas
 
-Copy or clone this repository into the FreeCAD user Mod directory.
+- Roscas representadas como zona rebajada (no helicoidales reales).
+- Dientes de engranaje trapezoidales aproximados (no involuta exacta);
+  para engranajes de precisión, futuro dominio `gear` delegando en
+  `InvoluteGearFeature` de FreeCAD.
+- Unidades siempre mm.
 
-Example on Windows:
+## Roadmap sugerido
 
-C:\Users\<USER>\AppData\Roaming\FreeCAD\Mod\AIDibujantetrazable
-
-Then restart FreeCAD.
-
-The Workbench should appear as:
-
-AI Dibujante Traceable
-Usage
-Open FreeCAD.
-Select the AI Dibujante Traceable Workbench.
-Click Abrir asistente.
-Write a prompt.
-Generate the CAD plan locally or using Ollama.
-Execute the model step by step or all at once.
-Export STEP/STL if needed.
-Example Local Prompt
-crea un eje con tramos Ø20x60, Ø30x120 y Ø25x70
-Example AI Prompt
-Diseña un eje de 250 mm con extremos delgados y tramo central robusto para montar una polea. Agrega chavetero central y rosca M20 derecha.
-Known Limitations
-
-This is an experimental prototype.
-
-Current limitations:
-
-AI-generated plans may contain inconsistent dimensions;
-the system does not yet validate thread diameter against shaft diameter;
-keyway position may be incorrect if generated by the LLM;
-the thread is simplified and not a real helical thread;
-keyways are simplified rectangular cuts;
-no mechanical stress validation is included yet;
-no fatigue analysis is included yet;
-no automatic technical drawing generation is included yet.
-Roadmap
-Next steps
-Add core/plan_validator.py
-Validate geometric consistency
-Validate thread/shaft compatibility
-Validate keyway position
-Add mechanical shaft validation
-Add material and load inputs
-Add bending and torsion checks
-Add safety factor calculation
-Add TechDraw drawing generation
-Improve prompt-to-feature robustness
-Add versioned design history
-Project Goal
-
-The long-term goal is to build a local AI-assisted mechanical CAD copilot for FreeCAD.
-
-The system should act as a traceable mechanical drafting assistant capable of:
-
-understanding engineering prompts;
-generating parametric CAD models;
-validating design consistency;
-exporting manufacturing files;
-supporting mechanical design workflows.
-
-### MVP 3: validador geométrico/mecánico básico integrado
+1. Dominio `gear` formal (involuta vía Part Design).
+2. Dominio `plate` (placas con patrones de agujeros y cortes).
+3. Visión para más familias (piezas torneadas desde foto/plano).
+4. Modo macro experimental (IA genera Python, usuario aprueba) como
+   último recurso, con transacción + revisión previa.
