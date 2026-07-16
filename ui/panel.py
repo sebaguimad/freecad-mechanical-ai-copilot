@@ -4,9 +4,9 @@ Panel principal del Workbench.
 
 Tres caminos de entrada que convergen en el MISMO pipeline y executor:
 
-  1. IA universal (texto): clasifica → shaft | frame_structure | custom
+  1. IA universal (texto): clasifica -> shaft | frame_structure | custom
   2. Parser simple sin IA: "Ø20x60, Ø30x120, Ø25x70"
-  3. Imagen (visión): reconstrucción paramétrica aproximada
+  3. Imagen universal: recreación CAD aproximada desde foto/referencia
 
 Luego: ejecutar paso a paso o todo, exportar STEP/STL, ver logs.
 """
@@ -23,10 +23,17 @@ except ImportError:
 
 from core.parser import prompt_a_feature_plan
 from core.universal_parser import prompt_a_resultado_universal
-from core.domain_router import process_design_request
 from core.executor import FeatureExecutor
 from core.logger import obtener_ruta_log
 from core.exporter import exportar_step_stl, obtener_ruta_outputs
+
+
+PROMPT_IMAGEN_APROX_DEFAULT = (
+    "Recrea esta pieza mecánica de forma aproximada en FreeCAD. "
+    "No busques una copia exacta. Usa primitivas CAD editables y asume "
+    "dimensiones razonables si no hay cotas. Mantén la geometría limpia, "
+    "paramétrica y trazable."
+)
 
 
 class AIDibujantePanel:
@@ -45,7 +52,7 @@ class AIDibujantePanel:
 
         self.prompt_box = QtWidgets.QTextEdit()
         self.prompt_box.setPlaceholderText(
-            "Ejemplos (IA universal):\n"
+            "Ejemplos (IA universal texto):\n"
             "- Diseña un eje de 250 mm con extremos delgados y tramo central "
             "robusto. Chavetero central y rosca M20 derecha.\n"
             "- Genera un engranaje recto de 40 dientes, módulo 2, ancho 20 mm, "
@@ -53,6 +60,10 @@ class AIDibujantePanel:
             "- Brida circular Ø160, espesor 15, agujero central Ø60, "
             "6 pernos M12 en círculo Ø120.\n"
             "- Mesa industrial de 1500x750x900 con tubo 40x40x3.\n\n"
+            "Ejemplo para imagen aproximada:\n"
+            "Recrea esta pieza mecánica de forma aproximada en FreeCAD. "
+            "No busques una copia exacta. Usa primitivas CAD editables y "
+            "asume dimensiones razonables si no hay cotas.\n\n"
             "Modo simple sin IA:\n"
             "crea un eje con tramos Ø20x60, Ø30x120 y Ø25x70"
         )
@@ -70,7 +81,9 @@ class AIDibujantePanel:
         self.btn_simple.clicked.connect(self.generar_plan_simple)
         fila.addWidget(self.btn_simple)
 
-        self.btn_imagen = QtWidgets.QPushButton("1C. Desde imagen (visión)")
+        self.btn_imagen = QtWidgets.QPushButton(
+            "1C. Recrear desde imagen (aprox.)"
+        )
         self.btn_imagen.clicked.connect(self.generar_desde_imagen)
         fila.addWidget(self.btn_imagen)
 
@@ -127,8 +140,8 @@ class AIDibujantePanel:
 
         self.result_box.setText(
             f"Plan CAD generado correctamente con {origen}.{extra}\n"
-            "Revisa el resumen y las correcciones; luego ejecuta paso a paso "
-            "o ejecuta todo."
+            "Revisa el resumen, supuestos y correcciones; luego ejecuta "
+            "paso a paso o ejecuta todo."
         )
 
     def _cargar_plan_directo(self, feature_plan, origen):
@@ -193,23 +206,27 @@ class AIDibujantePanel:
             if not ruta:
                 return
 
+            prompt = self.prompt_box.toPlainText().strip()
+            if not prompt:
+                prompt = PROMPT_IMAGEN_APROX_DEFAULT
+
             self.result_box.setText(
                 "Analizando imagen con IA de visión local...\n"
+                "Modo: recreación aproximada, no copia exacta.\n"
                 "Esto puede tardar hasta un par de minutos."
             )
             QtWidgets.QApplication.processEvents()
 
-            from ai.vision_reconstruction_parser import (
-                imagen_a_design_request_estructura
-            )
+            from core.universal_image_to_cad import reconstruir_imagen_aproximada
 
-            prompt = self.prompt_box.toPlainText()
-            design_request = imagen_a_design_request_estructura(
-                ruta, prompt_usuario=prompt
+            resultado = reconstruir_imagen_aproximada(
+                image_path=ruta,
+                prompt_usuario=prompt
             )
-
-            resultado = process_design_request(design_request, prompt)
-            self._cargar_resultado(resultado, origen="reconstrucción desde imagen")
+            self._cargar_resultado(
+                resultado,
+                origen="recreación aproximada desde imagen"
+            )
 
         except Exception as e:
             self.result_box.setText(
