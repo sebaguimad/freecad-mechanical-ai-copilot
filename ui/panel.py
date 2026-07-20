@@ -2,11 +2,12 @@
 """
 Panel principal del Workbench.
 
-Tres caminos de entrada que convergen en el MISMO pipeline y executor:
+Cuatro caminos de entrada que convergen en el MISMO pipeline y executor:
 
   1. IA universal (texto): clasifica -> shaft | frame_structure | custom
   2. Parser simple sin IA: "Ø20x60, Ø30x120, Ø25x70"
   3. Imagen universal: recreación CAD aproximada desde foto/referencia
+  4. RPC local: Ollama, Claude, ChatGPT u otro agente externo controla FreeCAD
 
 Luego: ejecutar paso a paso o todo, exportar STEP/STL, ver logs.
 """
@@ -104,6 +105,12 @@ class AIDibujantePanel:
         self.btn_exportar = QtWidgets.QPushButton("4. Exportar STEP/STL")
         self.btn_exportar.clicked.connect(self.exportar_modelo)
         layout.addWidget(self.btn_exportar)
+
+        self.btn_rpc = QtWidgets.QPushButton(
+            "5. Iniciar RPC Server (Ollama / IA externa)"
+        )
+        self.btn_rpc.clicked.connect(self.iniciar_rpc_server)
+        layout.addWidget(self.btn_rpc)
 
         self.result_box = QtWidgets.QTextEdit()
         self.result_box.setReadOnly(True)
@@ -302,6 +309,24 @@ class AIDibujantePanel:
 
         except Exception as e:
             self.result_box.setText(f"Error al exportar modelo:\n{str(e)}")
+
+    def iniciar_rpc_server(self):
+        try:
+            from core.freecad_rpc_server import start_rpc_server
+
+            status = start_rpc_server()
+            self.result_box.setText(
+                "Servidor RPC local iniciado.\n\n"
+                "Ahora Ollama, Claude, ChatGPT u otro cliente externo puede "
+                "controlar FreeCAD mediante herramientas seguras.\n\n"
+                f"URL: http://127.0.0.1:8765\n\n"
+                f"Estado:\n{json.dumps(status, indent=2, ensure_ascii=False)}\n\n"
+                "Prueba externa:\n"
+                "python agent/ollama_freecad_agent.py \"crea una brida Ø160 con agujero central Ø60\""
+            )
+
+        except Exception as e:
+            self.result_box.setText(f"Error al iniciar RPC server:\n{str(e)}")
 
     def mostrar_log(self):
         try:
