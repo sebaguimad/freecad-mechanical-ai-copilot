@@ -1,221 +1,174 @@
-# AI Dibujante Modular — v0.5 (IA externa + RPC local)
+# AI Dibujante Modular — v0.7 Agent Mode
 
-Copiloto CAD local para FreeCAD. Genera piezas mecánicas paramétricas desde
-texto o imágenes usando IA local (Ollama), con validación trazable,
-correcciones automáticas registradas y exportación STEP/STL.
+Copiloto CAD local para FreeCAD con Ollama. Convierte texto, fotografías y planos
+en recreaciones mecánicas paramétricas aproximadas, ejecuta el modelo en FreeCAD
+y ahora puede inspeccionar lo generado y realizar hasta 3 intentos de corrección.
 
-## Qué hay de nuevo en esta versión
-
-### 1. Pipeline universal (texto)
-
-Un solo botón: el sistema clasifica el pedido y lo rutea al dominio correcto.
+## Flujo principal
 
 ```text
-prompt → clasificador → shaft | frame_structure | custom
-       → schema JSON de esa familia (Ollama, salida estructurada)
-       → validador del dominio (corrige y registra)
-       → planner → feature tree
-       → executor unificado → geometría FreeCAD
+texto / foto / plano
+      ↓
+Ollama / Qwen Vision
+      ↓
+design_request + assumptions
+      ↓
+validator + feature_plan
+      ↓
+AdvancedFeatureExecutor
+      ↓
+FreeCAD / OpenCASCADE
+      ↓
+inspección geométrica + capturas
+      ↓
+IA revisora
+      ↓
+ACCEPT ───────────────→ modelo final
+  │
+  └─ REGENERATE → instrucciones de corrección → nuevo intento
 ```
 
-### 2. Recreación aproximada desde imagen
+El objetivo es **recreación aproximada**, no fotogrametría ni ingeniería inversa
+metrológica exacta.
 
-Nuevo flujo para imágenes:
+## Agent Mode
 
-```text
-imagen + prompt opcional
-  → modelo de visión local
-  → design_request aproximado
-  → frame_structure | custom
-  → validador
-  → feature_plan trazable
-  → executor unificado
-  → modelo FreeCAD editable
-```
+El panel incorpora dos acciones nuevas:
 
-El objetivo NO es copiar exactamente la foto ni hacer fotogrametría. El objetivo
-es recrear una pieza o estructura de forma aproximada usando primitivas CAD
-editables y supuestos declarados.
+- **AGENTE: texto + autocorrección**: genera, inspecciona el shape, revisa errores
+de ejecución/topología y reintenta si el resultado no es coherente.
+- **AGENTE: imagen + feedback visual**: además captura vistas isométrica, frontal
+y lateral del resultado y las compara con la imagen/plano de referencia mediante
+el modelo de visión.
+
+El revisor considera silueta, topología, agujeros, salientes, patrones, simetrías
+y proporciones generales. No intenta igualar color, textura o iluminación.
+
+Más detalles: [`README_AGENT_FEEDBACK.md`](README_AGENT_FEEDBACK.md).
+
+## Geometría universal
+
+Operaciones básicas:
+
+`box, cylinder, cone, sphere, polygon_prism, polar_pattern, fillet_all, chamfer_all`
+
+Operaciones avanzadas:
+
+`sketch_extrude, revolve, sweep, loft, linear_pattern, mirror`
+
+Esto permite aproximar, entre otras cosas:
+
+- ejes, bujes y piezas torneadas;
+- bridas y placas perforadas;
+- poleas y cuerpos de revolución;
+- engranajes simplificados;
+- soportes, ménsulas y nervios;
+- mesas, bastidores y estructuras soldadas;
+- tubos/manillas simples mediante sweep;
+- transiciones y carcasas simplificadas mediante loft;
+- geometrías repetitivas y simétricas.
+
+## Imagen y planos
 
 Prompt recomendado:
 
-> Recrea esta pieza mecánica de forma aproximada en FreeCAD. No busques una copia exacta. Usa primitivas CAD editables y asume dimensiones razonables si no hay cotas. Mantén la geometría limpia, paramétrica y trazable.
+> Recrea esta pieza mecánica aproximadamente en FreeCAD. Prioriza las cotas visibles. Conserva la topología, simetrías y patrones principales. Si faltan dimensiones, asume valores razonables y decláralos. Prefiere geometría CAD robusta antes que detalles frágiles.
 
-Este modo puede elegir:
+Para obtener el mejor resultado utiliza **AGENTE: imagen + feedback visual**.
 
-- `frame_structure`: mesas industriales, bastidores, carros, marcos soldados.
-- `custom`: piezas mecánicas aproximables con cajas, cilindros, conos, prismas,
-  cortes, patrones, filetes y chaflanes.
+## RPC para cualquier IA
 
-### 3. RPC local para Ollama, Claude, ChatGPT u otra IA
-
-Además del panel interno, ahora FreeCAD puede actuar como servidor local de
-herramientas CAD.
+FreeCAD también puede funcionar como backend local para Ollama, Claude, ChatGPT
+o cualquier agente capaz de llamar el cliente RPC.
 
 ```text
-Ollama / Claude / ChatGPT / agente externo
-        ↓
+IA externa
+   ↓
 FreeCADRPCClient
-        ↓
-FreeCAD RPC Server dentro de FreeCAD
-        ↓
-FeatureExecutor + generators/primitives.py
-        ↓
-Modelo FreeCAD editable
+   ↓
+RPC local 127.0.0.1:8765
+   ↓
+FreeCAD
 ```
 
-Esto permite un flujo parecido a un conector MCP:
+El objetivo es exponer herramientas CAD controladas en vez de ejecutar Python
+arbitrario generado por el modelo.
 
-- la IA razona fuera de FreeCAD;
-- llama herramientas controladas;
-- FreeCAD crea cajas, cilindros, agujeros, filetes, chaflanes o ejecuta un
-  `feature_plan` completo;
-- no se ejecuta Python arbitrario generado por IA.
-
-Herramientas RPC iniciales:
-
-`ping, status, get_objects, clear_document, create_box, create_cylinder, boolean_fuse, cut_cylinder_hole, add_fillet_all, add_chamfer_all, run_feature_plan, run_prompt_universal, save_document, export_step_stl`
-
-Para iniciar el servidor desde FreeCAD:
+Desde FreeCAD:
 
 ```python
 from core.freecad_rpc_server import start_rpc_server
 start_rpc_server()
 ```
 
-O desde el panel:
-
-```text
-5. Iniciar RPC Server (Ollama / IA externa)
-```
-
-Luego, desde PowerShell:
-
-```powershell
-python agent/ollama_freecad_agent.py "crea una brida circular Ø160, espesor 15, agujero central Ø60 y 6 agujeros M12 en círculo Ø120"
-```
-
-Más detalles en [`README_RPC_AGENT.md`](README_RPC_AGENT.md).
-
-### 4. Dominio `custom` (el universal)
-
-En vez de código Python libre (frágil con modelos locales de 8B), la IA devuelve
-una lista ordenada de operaciones genéricas:
-
-`box, cylinder, cone, sphere, polygon_prism, polar_pattern, fillet_all, chamfer_all`
-
-con modo `agregar` / `cortar`. Con ese vocabulario se aproximan engranajes
-simplificados, bridas, poleas, soportes, bujes, ménsulas, placas con agujeros,
-adaptadores, etc. Ejemplos:
-
-- "Genera un engranaje recto de 40 dientes, módulo 2, ancho 20, agujero Ø20 con chavetero"
-- "Brida circular Ø160, espesor 15, agujero central Ø60, 6 pernos M12 en círculo Ø120"
-- Imagen de una pieza mecánica + prompt de recreación aproximada.
-
-### 5. Correcciones de bugs de la versión anterior
-
-- **Router roto**: `domain_router` importaba `domains/shaft` y `domains/plate`
-  inexistentes (ImportError en runtime). Ahora `shaft` existe como dominio
-  formal y cualquier familia desconocida cae a `custom`.
-- **Regex peligroso**: el validador capturaba el primer número con "mm" del
-  prompt como longitud total (p.ej. "chavetero de 40 mm" redimensionaba el
-  eje). Ahora la longitud total viene como campo `longitud_total` del JSON de
-  la IA; el regex quedó solo como fallback con patrones explícitos.
-- **Filete que reventaba**: `makeFillet` sobre TODAS las aristas fallaba en OCC
-  con chaveteros/roscas. Ahora: `fillet_shoulders` y `aplicar_filete_seguro`.
-- **Rosca que rellenaba chaveteros**: la rosca simplificada (cut+fuse) destruía
-  un chavetero solapado. El validador recorta o elimina la rosca en conflicto,
-  y el planner además ejecuta roscas antes que chaveteros.
-- **Dos executors**: `FeatureExecutor` y `frame_direct_executor`. Ahora hay UN
-  executor trazable para todo, con BOM integrado y transacción de documento.
-- **Headless**: `FreeCADGui` se importa protegido; el pipeline corre en
-  `freecadcmd`.
-- **Código triplicado de Ollama**: unificado en `ai/ollama_client.py`.
-- **package.xml** agregado (Addon Manager).
-
-### 6. Tests (sin FreeCAD)
-
-Los validadores, planners y el router son Python puro:
-
-```powershell
-pip install pytest
-pytest tests/ -v
-```
+Más detalles: [`README_RPC_AGENT.md`](README_RPC_AGENT.md).
 
 ## Instalación
 
-1. Copiar esta carpeta a `<UserAppData>/FreeCAD/Mod/AIDibujanteModular`
-   (en Windows: `%APPDATA%/FreeCAD/Mod/AIDibujanteModular`).
-2. Instalar Ollama y los modelos:
-   ```powershell
-   ollama pull qwen3:8b
-   ollama pull qwen2.5vl:7b
-   ```
-3. Abrir FreeCAD → workbench "AIDibujanteModular" → Abrir asistente.
+1. Copiar el proyecto a `%APPDATA%/FreeCAD/Mod/AIDibujanteModular`.
+2. Instalar Ollama.
+3. Descargar los modelos recomendados:
 
-Variables de entorno opcionales:
-`AI_CAD_OLLAMA_URL`, `AI_CAD_OLLAMA_MODEL`, `AI_CAD_OLLAMA_VISION_MODEL`,
-`AI_CAD_RPC_URL`, `AI_CAD_RPC_PORT`.
-
-## Uso
-
-| Botón | Qué hace |
-|---|---|
-| 1. IA universal (texto) | Clasifica y genera el plan del dominio correcto |
-| 1B. Parser simple | `Ø20x60, Ø30x120, Ø25x70` sin IA |
-| 1C. Recrear desde imagen (aprox.) | Recreación paramétrica aproximada desde imagen |
-| 2 / 3 | Ejecutar paso a paso o todo (trazable, con métricas) |
-| 4 | Exportar STEP + STL a `~/AIDibujanteOutputs` |
-| 5 | Iniciar RPC Server para Ollama / IA externa |
-
-Logs JSONL de cada operación en `~/AIDibujanteLogs`.
-
-## Filosofía Texto vs Imagen vs Agente externo
-
-- **Texto** → diseñar desde cero o reconstruir aproximadamente por descripción.
-- **Imagen** → recrear aproximadamente algo existente.
-- **Agente externo** → conversación paso a paso: crear, modificar, consultar,
-  exportar y guardar desde herramientas CAD controladas.
-
-Todos convergen en el mismo motor: `design_request` / `feature_plan` → validador
-→ executor → FreeCAD.
-
-## Estructura
-
-```text
-ai/            cliente Ollama unificado, visión, saneo JSON, config modelos
-agent/         agente Ollama -> FreeCAD RPC
-core/          clasificador, parser universal, router, executor, logger,
-               métricas, exportador, RPC server/client, pipeline imagen universal
-domains/
-  shaft/           eje escalonado (spec + validador + planner + summary)
-  frame_structure/ estructuras de perfiles (con BOM)
-  custom/          dominio universal por operaciones genéricas
-generators/    primitivas geométricas (único módulo que toca Part)
-ui/            panel Qt
-tests/         tests de validadores, planners y router (sin FreeCAD)
+```powershell
+ollama pull qwen3:8b
+ollama pull qwen2.5vl:7b
 ```
 
-## Limitaciones declaradas
+4. Abrir FreeCAD y seleccionar `AIDibujanteModular`.
 
-- La reconstrucción desde imagen es aproximada; no es copia exacta ni
-  fotogrametría.
-- Si no hay cotas visibles, se asumen dimensiones razonables y se registran en
-  `assumptions`.
-- El servidor RPC es experimental y escucha solo en `127.0.0.1` por defecto.
-- FreeCAD puede no ser completamente thread-safe bajo RPC; guarda antes de
-  pruebas largas.
-- Roscas representadas como zona rebajada (no helicoidales reales).
-- Dientes de engranaje trapezoidales aproximados (no involuta exacta); para
-  engranajes de precisión, futuro dominio `gear` delegando en
-  `InvoluteGearFeature` de FreeCAD.
-- Unidades siempre mm.
+## Archivos clave
 
-## Roadmap sugerido
+```text
+ai/
+  ollama_client.py              texto + visión + multi-imagen
+  approx_mechanical_vision_parser.py
+  model_critic.py               revisor IA
 
-1. Servidor MCP oficial encima del RPC local.
-2. Dominio `gear` formal (involuta vía Part Design).
-3. Dominio `plate` (placas con patrones de agujeros y cortes).
-4. Mejorar visión para piezas torneadas desde foto/plano.
-5. Modo macro experimental (IA genera Python, usuario aprueba) como último
-   recurso, con transacción + revisión previa.
+core/
+  universal_parser.py
+  universal_image_to_cad.py
+  executor.py
+  executor_advanced.py
+  model_feedback.py             inspección OCC + screenshots
+  self_correcting_agent.py      generate -> inspect -> critique -> retry
+  freecad_rpc_server.py
+  freecad_rpc_client.py
+
+generators/
+  primitives.py
+  advanced_primitives.py
+
+domains/
+  shaft/
+  frame_structure/
+  custom/
+
+ui/panel.py
+```
+
+## Seguridad y trazabilidad
+
+- Los planes se validan antes de ejecutar.
+- Los supuestos y datos faltantes se conservan en el `design_request`/plan.
+- Las operaciones se registran en logs.
+- Los reintentos eliminan los objetos creados por el intento descartado.
+- El RPC escucha en localhost por defecto.
+- El modo normal no ejecuta Python arbitrario producido por la IA.
+
+## Limitaciones
+
+- Una sola foto no revela dimensiones o geometría oculta.
+- El feedback visual puede equivocarse: siempre revisar antes de fabricar.
+- `loft`, `sweep`, filetes y booleanas complejas pueden fallar para geometrías
+degeneradas de OpenCASCADE.
+- Los engranajes universales usan dientes aproximados, no involuta certificada.
+- Roscas pueden representarse de forma simplificada.
+- No se garantizan tolerancias, GD&T, material ni manufacturabilidad.
+
+## Estado
+
+**v0.7 experimental / research prototype.**
+
+La meta es evolucionar desde un generador de CAD hacia un agente CAD que pueda
+observar el resultado de FreeCAD, detectar problemas y corregir su estrategia de
+modelado de forma iterativa y trazable.
