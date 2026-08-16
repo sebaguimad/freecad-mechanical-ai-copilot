@@ -1,4 +1,4 @@
-"""Extension del FeatureExecutor con operaciones CAD avanzadas."""
+"""Extension del FeatureExecutor con operaciones CAD avanzadas y rebuild incremental."""
 
 from core.executor import FeatureExecutor
 from generators.primitives import construir_shape, fusionar_solidos
@@ -14,6 +14,17 @@ from generators.advanced_primitives import (
 
 class AdvancedFeatureExecutor(FeatureExecutor):
     """FeatureExecutor compatible con planes antiguos y geometria avanzada."""
+
+    def __init__(self, feature_plan):
+        # Los features suprimidos permanecen en el plan para trazabilidad, pero
+        # no participan en la reconstruccion geometrica.
+        clean_plan = dict(feature_plan)
+        clean_plan["feature_tree"] = [
+            f for f in feature_plan.get("feature_tree", [])
+            if not f.get("suppressed", False)
+        ]
+        super().__init__(clean_plan)
+        self.original_feature_plan = feature_plan
 
     def _build_tool_shape(self, shape_spec):
         kind = shape_spec.get("kind")
@@ -98,6 +109,84 @@ class AdvancedFeatureExecutor(FeatureExecutor):
             mensaje=f"Simetria respecto de {feature.get('plane', 'YZ')} ({mode})."
         )
 
+    # ------------------------------------------------------------------
+    # Rebuild incremental para el agente de correccion
 
-# Alias para poder reemplazar el executor sin cambiar APIs externas.
+    def _is_custom_result_feature(self, feature):
+        return feature.get("type") in {
+            "solid_add", "solid_cut", "polar_pattern", "linear_pattern",
+            "mirror", "fillet_all", "chamfer_all"
+        }
+
+    def rebuild_from_index(self, new_feature_plan, affected_index):
+        """Reutiliza el prefijo ya ejecutado y recalcula solo el sufijo afectado.
+
+        Diseñado para family=custom. Si la estructura del prefijo cambia o no
+        existe estado reutilizable, el llamador debe caer a regeneracion completa.
+        """
+        if self.family != "custom":
+            raise ValueError("El rebuild incremental actualmente solo soporta family=custom.")
+
+        new_tree_all = new_feature_plan.get("feature_tree", [])
+        new_tree = [f for f in new_tree_all if not f.get("suppressed", False)]
+        affected_index = max(0, min(int(affected_index), len(new_tree)))
+
+        # Verificar que el prefijo conserva exactamente los mismos ids.
+        old_prefix_ids = [f.get("id") for f in self.feature_tree[:affected_index]]
+        new_prefix_ids = [f.get("id") for f in new_tree[:affected_index]]
+        if old_prefix_ids != new_prefix_ids:
+            raise ValueError("El prefijo del plan cambio; no se puede reutilizar de forma segura.")
+
+        # Borrar objetos/document-state solo desde el primer feature afectado.
+        suffix_ids = {f.get("id") for f in self.feature_tree[affected_index:]}
+        for fid in list(suffix_ids):
+            obj = self.state.pop(fid, None)
+            if obj is not None:
+                try:
+                    self.doc.removeObject(obj.Name)
+                except Exception:
+                    pass
+            self.tool_shapes.pop(fid, None)
+            self.tool_modes.pop(fid, None)
+
+        self.doc.recompute()
+
+        # El ultimo feature geometrico previo pasa a ser el current_id reutilizado.
+        self.current_id = None
+        self.final_object = None
+        for feature in new_tree[:affected_index]:
+            fid = feature.get("id")
+            if self._is_custom_result_feature(feature) and fid in self.state:
+                self.current_id = fid
+                self.final_object = self.state[fid]
+
+        # Herramientas de operaciones previas deben seguir disponibles para
+        # patterns posteriores. Si alguna se perdio, reconstruir su tool shape sin
+        # modificar el documento.
+        for feature in new_tree[:affected_index]:
+            fid = feature.get("id")
+            ftype = feature.get("type")
+            if ftype in ("solid_add", "solid_cut") and fid not in self.tool_shapes:
+                self.tool_shapes[fid] = self._build_tool_shape(feature["shape"])
+                self.tool_modes[fid] = "agregar" if ftype == "solid_add" else "cortar"
+
+        self.original_feature_plan = new_feature_plan
+        self.feature_plan = dict(new_feature_plan)
+        self.feature_tree = new_tree
+        self.current_index = affected_index
+
+        results = []
+        self._begin_transaction()
+        try:
+            while self.has_next():
+                result = self.execute_next()
+                results.append(result)
+                if result.get("status") == "error":
+                    break
+        finally:
+            self._commit_transaction()
+
+        return results
+
+
 FeatureExecutorAdvanced = AdvancedFeatureExecutor
