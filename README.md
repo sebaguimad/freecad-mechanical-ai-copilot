@@ -1,131 +1,174 @@
-# AI Dibujante Modular — v0.3 (versión universal)
+# AI Dibujante Modular — v0.7 Agent Mode
 
-Copiloto CAD local para FreeCAD. Genera piezas mecánicas paramétricas desde
-texto o imágenes usando IA local (Ollama), con validación trazable,
-correcciones automáticas registradas y exportación STEP/STL.
+Copiloto CAD local para FreeCAD con Ollama. Convierte texto, fotografías y planos
+en recreaciones mecánicas paramétricas aproximadas, ejecuta el modelo en FreeCAD
+y ahora puede inspeccionar lo generado y realizar hasta 3 intentos de corrección.
 
-## Qué hay de nuevo en esta versión
+## Flujo principal
 
-### 1. Pipeline universal (texto)
-
-Un solo botón: el sistema clasifica el pedido y lo rutea al dominio correcto.
-
+```text
+texto / foto / plano
+      ↓
+Ollama / Qwen Vision
+      ↓
+design_request + assumptions
+      ↓
+validator + feature_plan
+      ↓
+AdvancedFeatureExecutor
+      ↓
+FreeCAD / OpenCASCADE
+      ↓
+inspección geométrica + capturas
+      ↓
+IA revisora
+      ↓
+ACCEPT ───────────────→ modelo final
+  │
+  └─ REGENERATE → instrucciones de corrección → nuevo intento
 ```
-prompt → clasificador → shaft | frame_structure | custom
-       → schema JSON de esa familia (Ollama, salida estructurada)
-       → validador del dominio (corrige y registra)
-       → planner → feature tree
-       → executor unificado → geometría FreeCAD
-```
 
-### 2. Nuevo dominio `custom` (el universal)
+El objetivo es **recreación aproximada**, no fotogrametría ni ingeniería inversa
+metrológica exacta.
 
-En vez de código Python libre (frágil con modelos locales de 8B), la IA
-devuelve una lista ordenada de operaciones genéricas:
+## Agent Mode
+
+El panel incorpora dos acciones nuevas:
+
+- **AGENTE: texto + autocorrección**: genera, inspecciona el shape, revisa errores
+de ejecución/topología y reintenta si el resultado no es coherente.
+- **AGENTE: imagen + feedback visual**: además captura vistas isométrica, frontal
+y lateral del resultado y las compara con la imagen/plano de referencia mediante
+el modelo de visión.
+
+El revisor considera silueta, topología, agujeros, salientes, patrones, simetrías
+y proporciones generales. No intenta igualar color, textura o iluminación.
+
+Más detalles: [`README_AGENT_FEEDBACK.md`](README_AGENT_FEEDBACK.md).
+
+## Geometría universal
+
+Operaciones básicas:
 
 `box, cylinder, cone, sphere, polygon_prism, polar_pattern, fillet_all, chamfer_all`
 
-con modo `agregar` / `cortar`. Con ese vocabulario se aproximan engranajes
-simplificados, bridas, poleas, soportes, bujes, ménsulas, placas con
-agujeros, adaptadores, etc. Ejemplos que ya funcionan:
+Operaciones avanzadas:
 
-- "Genera un engranaje recto de 40 dientes, módulo 2, ancho 20, agujero Ø20 con chavetero"
-- "Brida circular Ø160, espesor 15, agujero central Ø60, 6 pernos M12 en círculo Ø120"
+`sketch_extrude, revolve, sweep, loft, linear_pattern, mirror`
 
-### 3. Correcciones de bugs de la versión anterior
+Esto permite aproximar, entre otras cosas:
 
-- **Router roto**: `domain_router` importaba `domains/shaft` y `domains/plate`
-  inexistentes (ImportError en runtime). Ahora `shaft` existe como dominio
-  formal y cualquier familia desconocida cae a `custom`.
-- **Regex peligroso**: el validador capturaba el primer número con "mm" del
-  prompt como longitud total (p.ej. "chavetero de 40 mm" redimensionaba el
-  eje). Ahora la longitud total viene como campo `longitud_total` del JSON
-  de la IA; el regex quedó solo como fallback con patrones explícitos.
-- **Filete que reventaba**: `makeFillet` sobre TODAS las aristas fallaba en
-  OCC con chaveteros/roscas. Ahora: `fillet_shoulders` (solo aristas de
-  hombro en ejes) y `aplicar_filete_seguro` (degrada arista por arista con
-  warning en vez de abortar).
-- **Rosca que rellenaba chaveteros**: la rosca simplificada (cut+fuse)
-  destruía un chavetero solapado. El validador recorta o elimina la rosca
-  en conflicto, y el planner además ejecuta roscas antes que chaveteros.
-- **Dos executors**: `FeatureExecutor` (ejes) y `frame_direct_executor`
-  (estructuras, sin logging). Ahora hay UN executor trazable para todo,
-  con BOM integrado y transacción de documento (un Ctrl+Z revierte la pieza).
-- **Headless**: `FreeCADGui` se importa protegido; el pipeline corre en
-  `freecadcmd` (permite automatizar y testear).
-- **Código triplicado de Ollama**: unificado en `ai/ollama_client.py`.
-- **package.xml** agregado (Addon Manager).
+- ejes, bujes y piezas torneadas;
+- bridas y placas perforadas;
+- poleas y cuerpos de revolución;
+- engranajes simplificados;
+- soportes, ménsulas y nervios;
+- mesas, bastidores y estructuras soldadas;
+- tubos/manillas simples mediante sweep;
+- transiciones y carcasas simplificadas mediante loft;
+- geometrías repetitivas y simétricas.
 
-### 4. Tests (sin FreeCAD)
+## Imagen y planos
 
-Los validadores, planners y el router son Python puro:
+Prompt recomendado:
 
+> Recrea esta pieza mecánica aproximadamente en FreeCAD. Prioriza las cotas visibles. Conserva la topología, simetrías y patrones principales. Si faltan dimensiones, asume valores razonables y decláralos. Prefiere geometría CAD robusta antes que detalles frágiles.
+
+Para obtener el mejor resultado utiliza **AGENTE: imagen + feedback visual**.
+
+## RPC para cualquier IA
+
+FreeCAD también puede funcionar como backend local para Ollama, Claude, ChatGPT
+o cualquier agente capaz de llamar el cliente RPC.
+
+```text
+IA externa
+   ↓
+FreeCADRPCClient
+   ↓
+RPC local 127.0.0.1:8765
+   ↓
+FreeCAD
 ```
-pip install pytest
-pytest tests/ -v        # 26 tests
+
+El objetivo es exponer herramientas CAD controladas en vez de ejecutar Python
+arbitrario generado por el modelo.
+
+Desde FreeCAD:
+
+```python
+from core.freecad_rpc_server import start_rpc_server
+start_rpc_server()
 ```
+
+Más detalles: [`README_RPC_AGENT.md`](README_RPC_AGENT.md).
 
 ## Instalación
 
-1. Copiar esta carpeta a `<UserAppData>/FreeCAD/Mod/AIDibujanteModular`
-   (en Windows: `%APPDATA%/FreeCAD/Mod/AIDibujanteModular`).
-2. Instalar Ollama y los modelos:
-   ```
-   ollama pull qwen3:8b
-   ollama pull qwen2.5vl:7b
-   ```
-3. Abrir FreeCAD → workbench "AIDibujanteModular" → Abrir asistente.
+1. Copiar el proyecto a `%APPDATA%/FreeCAD/Mod/AIDibujanteModular`.
+2. Instalar Ollama.
+3. Descargar los modelos recomendados:
 
-Variables de entorno opcionales:
-`AI_CAD_OLLAMA_URL`, `AI_CAD_OLLAMA_MODEL`, `AI_CAD_OLLAMA_VISION_MODEL`.
-
-## Uso
-
-| Botón | Qué hace |
-|---|---|
-| 1. IA universal (texto) | Clasifica y genera el plan del dominio correcto |
-| 1B. Parser simple | `Ø20x60, Ø30x120, Ø25x70` sin IA |
-| 1C. Desde imagen | Reconstrucción paramétrica aproximada (estructuras) |
-| 2 / 3 | Ejecutar paso a paso o todo (trazable, con métricas) |
-| 4 | Exportar STEP + STL a `~/AIDibujanteOutputs` |
-
-Logs JSONL de cada operación en `~/AIDibujanteLogs`.
-
-## Filosofía Texto vs Imagen
-
-- **Texto** → diseñar desde cero o reconstruir aproximadamente por descripción.
-- **Imagen** → reconstruir aproximadamente algo existente.
-
-Ambos convergen en el mismo `design_request` → mismo validador → mismo
-executor. La imagen es solo otro sensor del mismo pipeline.
-
-## Estructura
-
+```powershell
+ollama pull qwen3:8b
+ollama pull qwen2.5vl:7b
 ```
-ai/            cliente Ollama unificado, visión, saneo JSON, config modelos
-core/          clasificador, parser universal, router, executor, logger,
-               métricas, exportador, capabilities
+
+4. Abrir FreeCAD y seleccionar `AIDibujanteModular`.
+
+## Archivos clave
+
+```text
+ai/
+  ollama_client.py              texto + visión + multi-imagen
+  approx_mechanical_vision_parser.py
+  model_critic.py               revisor IA
+
+core/
+  universal_parser.py
+  universal_image_to_cad.py
+  executor.py
+  executor_advanced.py
+  model_feedback.py             inspección OCC + screenshots
+  self_correcting_agent.py      generate -> inspect -> critique -> retry
+  freecad_rpc_server.py
+  freecad_rpc_client.py
+
+generators/
+  primitives.py
+  advanced_primitives.py
+
 domains/
-  shaft/           eje escalonado (spec + validador + planner + summary)
-  frame_structure/ estructuras de perfiles (con BOM)
-  custom/          dominio universal por operaciones genéricas
-generators/    primitivas geométricas (único módulo que toca Part)
-ui/            panel Qt
-tests/         26 tests de validadores, planners y router (sin FreeCAD)
+  shaft/
+  frame_structure/
+  custom/
+
+ui/panel.py
 ```
 
-## Limitaciones declaradas
+## Seguridad y trazabilidad
 
-- Roscas representadas como zona rebajada (no helicoidales reales).
-- Dientes de engranaje trapezoidales aproximados (no involuta exacta);
-  para engranajes de precisión, futuro dominio `gear` delegando en
-  `InvoluteGearFeature` de FreeCAD.
-- Unidades siempre mm.
+- Los planes se validan antes de ejecutar.
+- Los supuestos y datos faltantes se conservan en el `design_request`/plan.
+- Las operaciones se registran en logs.
+- Los reintentos eliminan los objetos creados por el intento descartado.
+- El RPC escucha en localhost por defecto.
+- El modo normal no ejecuta Python arbitrario producido por la IA.
 
-## Roadmap sugerido
+## Limitaciones
 
-1. Dominio `gear` formal (involuta vía Part Design).
-2. Dominio `plate` (placas con patrones de agujeros y cortes).
-3. Visión para más familias (piezas torneadas desde foto/plano).
-4. Modo macro experimental (IA genera Python, usuario aprueba) como
-   último recurso, con transacción + revisión previa.
+- Una sola foto no revela dimensiones o geometría oculta.
+- El feedback visual puede equivocarse: siempre revisar antes de fabricar.
+- `loft`, `sweep`, filetes y booleanas complejas pueden fallar para geometrías
+degeneradas de OpenCASCADE.
+- Los engranajes universales usan dientes aproximados, no involuta certificada.
+- Roscas pueden representarse de forma simplificada.
+- No se garantizan tolerancias, GD&T, material ni manufacturabilidad.
+
+## Estado
+
+**v0.7 experimental / research prototype.**
+
+La meta es evolucionar desde un generador de CAD hacia un agente CAD que pueda
+observar el resultado de FreeCAD, detectar problemas y corregir su estrategia de
+modelado de forma iterativa y trazable.
